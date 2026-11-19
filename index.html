@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#14110f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Piano">
 <title>Pas à Pas Piano</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600&display=swap">
@@ -16,10 +20,11 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
+html,body{margin:0;height:100%;overscroll-behavior:none}
 body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body);-webkit-tap-highlight-color:transparent;
   padding:env(safe-area-inset-top,0) max(12px,env(safe-area-inset-right,0px)) env(safe-area-inset-bottom,0) max(12px,env(safe-area-inset-left,0px));
-  display:flex;flex-direction:column;overflow:hidden}
+  display:flex;flex-direction:column;overflow:hidden;
+  position:fixed;inset:0;height:100%;height:100dvh}
 button,select,input{font:inherit;color:inherit}
 button{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;cursor:pointer;min-height:44px}
 button:active{transform:scale(.97)}
@@ -59,6 +64,16 @@ input[type=range]{width:100%;accent-color:var(--rh)}
   #card{min-height:44px;padding:2px 10px} .nn{font-size:clamp(20px,6vh,34px)} #kb{height:30vh}
   header{padding:4px 0 2px} main{gap:6px} .dock{padding:4px 0 6px} .dock button{min-height:38px;padding:4px}
 }
+/* Short portrait screens (Safari with its toolbars and tab bar): compact everything but the falling notes */
+@media (orientation:portrait) and (max-height:760px){
+  header{padding:4px 0 2px} header h1{font-size:16px} header button{min-height:36px;padding:4px 10px}
+  #prog{margin:0 0 4px} main{gap:6px}
+  #card{min-height:46px;padding:2px 10px} .nn{font-size:clamp(22px,7vw,34px)}
+  #kb{height:clamp(90px,19vh,170px)} #roll{min-height:60px}
+  #status{min-height:18px;font-size:12px}
+  .dock{padding:4px 0 6px;gap:4px} .dock button{min-height:40px;padding:4px 2px;font-size:12px} .dock b{font-size:17px}
+}
+@media (orientation:portrait) and (max-height:600px){ #status{display:none} #kb{height:clamp(80px,17vh,140px)} }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -538,6 +553,8 @@ $('file').onchange = async e => {
   e.target.value = '';
 };
 window.addEventListener('resize', () => { drawKb(); });
+if(window.ResizeObserver) new ResizeObserver(() => drawKb()).observe($('stage'));
+window.visualViewport && visualViewport.addEventListener('resize', () => drawKb());
 /* Swipe on the falling notes: drag down = forward, drag up = back (silent). A plain tap = "Passer". */
 let drag = null;
 const roll = $('roll');
@@ -580,9 +597,7 @@ document.addEventListener('keydown', e => {
     const m = location.hash.match(/^#m=([^|]+)\|(.+)$/);
     if(m){
       const name = decodeURIComponent(m[1]), b64 = m[2].replace(/-/g,'+').replace(/_/g,'/');
-      song = midiFromB64(b64); song.name = name;
-      saveToLib(name, b64);
-      history.replaceState(null, '', location.pathname);
+      if(!(name in store.get('pp:lib', {}))){ song = midiFromB64(b64); song.name = name; saveToLib(name, b64); }
     }
   }catch(e){ song = null; }
   try{
