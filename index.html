@@ -271,7 +271,7 @@ function hit(n){
   const step = S.steps[S.idx]; if(!step) return false;
   if(step.notes.some(x=>x.n===n) && !S.latched.has(n)){
     S.latched.add(n);
-    if(step.notes.every(x=>S.latched.has(x.n))) { setTimeout(advance, 60); }
+    if(step.notes.every(x=>S.latched.has(x.n))) { setTimeout(advance, 20); }
     else render();
     return true;
   }
@@ -466,58 +466,84 @@ function playStep(){
 }
 
 /* ---------- microphone listening ---------- */
-const mic = { an:null, data:null, stream:null, timer:null, min:new Map(), cand:new Map(), binHz:0 };
-function micReset(){ mic.min = new Map(); mic.cand = new Map(); }
+const mic = { an:null, an2:null, data:null, data2:null, stream:null, timer:null, binHz:0, binHz2:0,
+  hist:[], histT:[], last:new Map(), cand:new Map(), first:0 };
+const NLO = 21, NHI = 108, HMS = 360;          // note range, onset history length (ms)
+function micReset(){ mic.cand = new Map(); mic.first = 0; }
 async function startMic(){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
     const a = ctx(); if(a.state !== 'running') await a.resume().catch(()=>{});
     const srcN = a.createMediaStreamSource(stream);
+    // long window for the bass (fine frequency resolution), short window for the rest (fast reaction)
     const an = a.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0; an.minDecibels = -110; an.maxDecibels = -10;
-    srcN.connect(an);
-    Object.assign(mic, {an, stream, data:new Float32Array(an.frequencyBinCount), binHz:a.sampleRate/an.fftSize});
-    mic.timer = setInterval(micTick, 40);
+    const an2 = a.createAnalyser(); an2.fftSize = 8192; an2.smoothingTimeConstant = 0; an2.minDecibels = -110; an2.maxDecibels = -10;
+    srcN.connect(an); srcN.connect(an2);
+    Object.assign(mic, {an, an2, stream, data:new Float32Array(an.frequencyBinCount), data2:new Float32Array(an2.frequencyBinCount),
+      binHz:a.sampleRate/an.fftSize, binHz2:a.sampleRate/an2.fftSize, hist:[], histT:[], last:new Map()});
+    mic.timer = setInterval(micTick, 20);
     return true;
   }catch(e){ setStatus('Micro refusé ou indisponible : autorise le micro pour ce site dans le navigateur.'); return false; }
 }
-function stopMic(){ clearInterval(mic.timer); mic.timer=null; mic.stream && mic.stream.getTracks().forEach(t=>t.stop()); mic.stream=null; }
+function stopMic(){ clearInterval(mic.timer); mic.timer=null; mic.stream && mic.stream.getTracks().forEach(t=>t.stop()); mic.stream=null; mic.an = mic.an2 = null; }
 function noteLevel(n){
-  const f = freq(n), d = mic.data, nyq = mic.binHz * d.length * 0.9;
+  const low = n < 55, d = low ? mic.data : mic.data2, bz = low ? mic.binHz : mic.binHz2;
+  const f = freq(n), nyq = bz * d.length * 0.9;
   const hs = f < 150 ? [2,3,4] : f < 450 ? [1,2,3] : [1,2];
   let best = -200;
   for(const h of hs){
     const fh = f*h; if(fh > nyq) continue;
-    const b = Math.round(fh / mic.binHz);
+    const b = Math.round(fh / bz);
     for(let k=b-1;k<=b+1;k++) if(d[k] > best) best = d[k];
   }
   return best;
 }
 function micTick(){
   const an = mic.an; if(!an) return;
-  an.getFloatFrequencyData(mic.data);
+  an.getFloatFrequencyData(mic.data); mic.an2.getFloatFrequencyData(mic.data2);
   // noise floor: median of 60 Hz–5 kHz
   const lo = Math.round(60/mic.binHz), hi = Math.round(5000/mic.binHz), samp = [];
   let peak = -200;
   for(let k=lo;k<hi;k+=3){ samp.push(mic.data[k]); if(mic.data[k]>peak) peak = mic.data[k]; }
   samp.sort((a,b)=>a-b); const floor = samp[samp.length>>1];
   $('meter').firstChild.style.width = Math.max(0, Math.min(100, (peak-floor-10)*2)) + '%';
-  const step = S.steps[S.idx]; if(!step) return;
+  // keep a short history of every note's level, so a note played a bit early is still caught after the step changes
   const now = performance.now();
+  const lv = new Float32Array(NHI-NLO+1);
+  for(let n=NLO;n<=NHI;n++) lv[n-NLO] = noteLevel(n);
+  mic.hist.push(lv); mic.histT.push(now);
+  while(mic.histT.length && now - mic.histT[0] > HMS){ mic.hist.shift(); mic.histT.shift(); }
+  const step = S.steps[S.idx]; if(!step) return;
   if(now < S.muteUntil) { micReset(); return; }
   const sens = +$('sens').value;               // 1..10
   const snr = 40 - sens*2.6;                   // dB above floor
-  const rise = 11 - sens*0.7;                  // dB rise above recent minimum
-  const settle = now - S.stepStart < 180;      // let the previous chord's attack finish
+  const rise = 11 - sens*0.7;                  // dB rise above the recent minimum
+  const promReq = 14 - sens;                   // dB above the neighbouring semitones
+  const inStep = new Set(step.notes.map(x=>x.n));
+  if(S.latched.size && !mic.first) mic.first = now;
+  const chord = step.notes.length >= 2 && S.latched.size >= 1;   // part of the chord already heard: be lenient with the rest
+  const lvl = n => (n<NLO||n>NHI) ? -200 : lv[n-NLO];
   for(const x of step.notes){
     if(S.latched.has(x.n)) continue;
-    const L = noteLevel(x.n);
-    if(settle || !mic.min.has(x.n)){ mic.min.set(x.n, L); continue; }
-    const m = Math.min(mic.min.get(x.n), L); mic.min.set(x.n, m);
-    // a real piano note is a narrow peak: louder than the semitones on each side (voices, TV, clatter are broad)
-    const prom = L - Math.max(noteLevel(x.n-1), noteLevel(x.n+1));
-    const ok = L - m >= rise && L - floor >= snr && prom >= 14 - sens;
-    const c = ok ? (mic.cand.get(x.n)||0) + 1 : 0; mic.cand.set(x.n, c);
-    if(c >= 2) hit(x.n);
+    const i = x.n - NLO, L = lvl(x.n);
+    // only look back to after this note's previous detection (its attack keeps rising for a moment)
+    const since = (mic.last.get(x.n) || 0) + (x.n < 55 ? 220 : 120);
+    let m = L, seen = 0;
+    for(let k=0;k<mic.hist.length-1;k++){ if(mic.histT[k] < since) continue; seen++; if(mic.hist[k][i] < m) m = mic.hist[k][i]; }
+    if(!seen){ mic.cand.set(x.n, 0); continue; }
+    // a real piano note is a narrow peak: louder than the semitones on each side (voices, TV, clatter are broad).
+    // Neighbours that belong to the chord are expected to ring too, so they don't count.
+    let nb = -200; for(const k of [x.n-1, x.n+1]) if(!inStep.has(k)) nb = Math.max(nb, lvl(k));
+    const prom = L - nb, up = L - m, snrOk = L - floor;
+    const strict = up >= rise && snrOk >= snr && prom >= promReq;
+    const relaxed = chord && up >= rise*0.5 && snrOk >= snr*0.7 && prom >= promReq*0.4;
+    const c = (strict || relaxed) ? (mic.cand.get(x.n)||0) + 1 : 0; mic.cand.set(x.n, c);
+    if(c >= (up >= rise + 8 ? 1 : 2)){ mic.last.set(x.n, now); hit(x.n); }
+  }
+  // big chord, one note still missing a moment after the others: accept it if it is clearly sounding
+  if(step.notes.length >= 3 && mic.first && now - mic.first > 200 && step.notes.length - S.latched.size === 1){
+    const x = step.notes.find(y => !S.latched.has(y.n));
+    if(x && lvl(x.n) - floor >= snr*0.6){ mic.last.set(x.n, now); hit(x.n); }
   }
 }
 
@@ -659,7 +685,8 @@ document.addEventListener('keydown', e => {
     const m = location.hash.match(/^#m=([^|]+)\|(.+)$/);
     if(m){
       const name = decodeURIComponent(m[1]), b64 = m[2].replace(/-/g,'+').replace(/_/g,'/');
-      if(!(name in store.get('pp:lib', {}))){ song = midiFromB64(b64); song.name = name; saveToLib(name, b64); }
+      // new song, or a corrected version of one already installed: (re)install it and open it
+      if(store.get('pp:lib', {})[name] !== b64){ song = midiFromB64(b64); song.name = name; saveToLib(name, b64); }
     }
   }catch(e){ song = null; }
   try{
