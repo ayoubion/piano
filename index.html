@@ -38,7 +38,7 @@ main{flex:1;display:flex;flex-direction:column;gap:10px;min-height:0}
 .nn.R{color:var(--rh)} .nn.L{color:var(--lh)} .nn.done{opacity:.25;text-decoration:line-through}
 .R{color:var(--rh)} .L{color:var(--lh)}
 #stage{flex:1;display:flex;flex-direction:column;min-height:0;border-radius:10px;overflow:hidden;background:#0c0a09}
-#roll{flex:1;min-height:90px;width:100%;display:block;cursor:pointer}
+#roll{flex:1;min-height:90px;width:100%;display:block;cursor:grab;touch-action:none}
 #kb{width:100%;height:clamp(110px,24vh,220px);display:block;flex:0 0 auto}
 #status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-height:22px}
 #meter{flex:0 0 60px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
@@ -304,6 +304,7 @@ function drawRoll(){
   const [g, W, H] = fitCanvas(cv), c = css(), L = kbLayout(W);
   const step = S.steps[S.idx]; if(!step) return;
   const ppq = S.song.ppq, ppt = H / (ppq * 4.5);    // pixels per tick: ~4.5 beats visible
+  view.ppt = ppt;
   const vt = view.t ?? step.t;
   g.clearRect(0,0,W,H);
   // guide lines on every C, and bar lines
@@ -336,6 +337,7 @@ function animate(){
   view.raf = 0;
   const step = S.steps[S.idx]; if(!step) return;
   if(view.t == null) view.t = step.t;
+  if(drag){ drawRoll(); return; }                   // finger controls the scroll
   const diff = step.t - view.t;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   if(reduce || Math.abs(diff) < 1 || Math.abs(diff) > S.song.ppq*16) view.t = step.t;
@@ -481,9 +483,11 @@ async function wake(){ try{ if('wakeLock' in navigator && !lock){ lock = await n
 document.addEventListener('visibilitychange', () => { if(document.visibilityState==='visible') wake(); });
 
 /* ---------- wiring ---------- */
-$('card').addEventListener('click', () => { ctx(); advance(); });
-$('card').addEventListener('keydown', e => { if(e.key===' '||e.key==='Enter'){ e.preventDefault(); advance(); } });
-$('bNext').onclick = advance;
+// "Passer" plays the notes being skipped, then moves on
+function skip(){ playStep(); advance(); }
+$('card').addEventListener('click', skip);
+$('card').addEventListener('keydown', e => { if(e.key===' '||e.key==='Enter'){ e.preventDefault(); skip(); } });
+$('bNext').onclick = skip;
 $('bPrev').onclick = back;
 $('bPlay').onclick = playStep;
 $('bLoop').onclick = () => {
@@ -521,10 +525,38 @@ $('file').onchange = async e => {
   e.target.value = '';
 };
 window.addEventListener('resize', () => { drawKb(); });
-$('roll').addEventListener('click', () => { ctx(); advance(); });
+/* Swipe on the falling notes: drag down = forward, drag up = back (silent). A plain tap = "Passer". */
+let drag = null;
+const roll = $('roll');
+roll.addEventListener('pointerdown', e => {
+  if(!S.steps.length) return;
+  drag = { y0:e.clientY, t0: view.t ?? S.steps[S.idx].t, moved:false, id:e.pointerId };
+  roll.setPointerCapture(e.pointerId);
+});
+roll.addEventListener('pointermove', e => {
+  if(!drag || e.pointerId !== drag.id) return;
+  const dy = e.clientY - drag.y0;
+  if(!drag.moved && Math.abs(dy) < 10) return;
+  drag.moved = true;
+  const steps = S.steps, last = steps[steps.length-1].t;
+  const t = Math.max(steps[0].t, Math.min(last, drag.t0 + dy / (view.ppt || 0.1)));
+  view.t = t;
+  // nearest step to the scroll position
+  let lo = 0, hi = steps.length-1;
+  while(lo < hi){ const m = (lo+hi)>>1; if(steps[m].t < t) lo = m+1; else hi = m; }
+  if(lo > 0 && t - steps[lo-1].t < steps[lo].t - t) lo--;
+  if(lo !== S.idx){ S.idx = lo; enterStep(); } else drawRoll();
+});
+const endDrag = e => {
+  if(!drag || e.pointerId !== drag.id) return;
+  const tap = !drag.moved; drag = null;
+  if(tap && e.type === 'pointerup'){ ctx(); skip(); } else drawKb();   // snap to the step
+};
+roll.addEventListener('pointerup', endDrag);
+roll.addEventListener('pointercancel', endDrag);
 document.addEventListener('keydown', e => {
   if($('menu').open) return;
-  if(e.key==='ArrowRight') advance(); else if(e.key==='ArrowLeft') back();
+  if(e.key==='ArrowRight') skip(); else if(e.key==='ArrowLeft') back();
 });
 
 /* ---------- boot ---------- */
