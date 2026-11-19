@@ -43,8 +43,9 @@ main{flex:1;display:flex;flex-direction:column;gap:10px;min-height:0}
 .nn.R{color:var(--rh)} .nn.L{color:var(--lh)} .nn.done{opacity:.25;text-decoration:line-through}
 .R{color:var(--rh)} .L{color:var(--lh)}
 #stage{flex:1;display:flex;flex-direction:column;min-height:0;border-radius:10px;overflow:hidden;background:#0c0a09}
-#roll{flex:1;min-height:90px;width:100%;display:block;cursor:grab;touch-action:none}
-#kb{width:100%;height:clamp(110px,24vh,220px);display:block;flex:0 0 auto}
+#rollBox{flex:1 1 0;position:relative;min-height:0}
+#roll{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+#kb{width:100%;height:clamp(110px,24dvh,220px);display:block;flex:0 0 auto}
 #status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-height:22px}
 #meter{flex:0 0 60px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
 #meter i{display:block;height:100%;width:0;background:var(--ok)}
@@ -61,7 +62,7 @@ label.file{display:block;text-align:center;border:1px dashed var(--muted);border
 label.file input{display:none}
 input[type=range]{width:100%;accent-color:var(--rh)}
 @media (orientation:landscape) and (max-height:500px){
-  #card{min-height:44px;padding:2px 10px} .nn{font-size:clamp(20px,6vh,34px)} #kb{height:30vh}
+  #card{min-height:44px;padding:2px 10px} .nn{font-size:clamp(20px,6vh,34px)} #kb{height:30dvh}
   header{padding:4px 0 2px} main{gap:6px} .dock{padding:4px 0 6px} .dock button{min-height:38px;padding:4px}
 }
 /* Short portrait screens (Safari with its toolbars and tab bar): compact everything but the falling notes */
@@ -69,11 +70,11 @@ input[type=range]{width:100%;accent-color:var(--rh)}
   header{padding:4px 0 2px} header h1{font-size:16px} header button{min-height:36px;padding:4px 10px}
   #prog{margin:0 0 4px} main{gap:6px}
   #card{min-height:46px;padding:2px 10px} .nn{font-size:clamp(22px,7vw,34px)}
-  #kb{height:clamp(90px,19vh,170px)} #roll{min-height:60px}
+  #kb{height:clamp(90px,20dvh,170px)}
   #status{min-height:18px;font-size:12px}
   .dock{padding:4px 0 6px;gap:4px} .dock button{min-height:40px;padding:4px 2px;font-size:12px} .dock b{font-size:17px}
 }
-@media (orientation:portrait) and (max-height:600px){ #status{display:none} #kb{height:clamp(80px,17vh,140px)} }
+@media (orientation:portrait) and (max-height:600px){ #status{display:none} #kb{height:clamp(80px,18dvh,140px)} }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -89,7 +90,7 @@ input[type=range]{width:100%;accent-color:var(--rh)}
     <div id="now"></div>
   </div>
   <div id="stage">
-    <canvas id="roll" aria-label="Notes qui tombent (toucher pour passer)"></canvas>
+    <div id="rollBox"><canvas id="roll" aria-label="Notes qui tombent (toucher pour passer)"></canvas></div>
     <canvas id="kb"></canvas>
   </div>
   <div id="status"><span id="stTxt">Mode manuel : touche les notes qui tombent pour avancer</span><div id="meter" hidden><i></i></div></div>
@@ -396,7 +397,22 @@ function drawKb(){
 
 /* ---------- audio out (listen to the step) ---------- */
 let actx = null;
-function ctx(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); return actx; }
+function ctx(){
+  if(!actx){
+    // iPhone: 'playback' makes sound play even with the silent switch on
+    try{ if(navigator.audioSession && S.src !== 'mic') navigator.audioSession.type = 'playback'; }catch(e){}
+    actx = new (window.AudioContext||window.webkitAudioContext)();
+  }
+  if(actx.state !== 'running') actx.resume().catch(()=>{});
+  return actx;
+}
+// Safari only lets audio start from a touch: unlock it on every touch until it is running
+function unlockAudio(){
+  const a = ctx(); if(a.state === 'running' && unlockAudio.done) return;
+  try{ const b = a.createBuffer(1, 1, 22050), s = a.createBufferSource(); s.buffer = b; s.connect(a.destination); s.start(0); }catch(e){}
+  unlockAudio.done = a.state === 'running';
+}
+['pointerdown','touchend','click','keydown'].forEach(ev => document.addEventListener(ev, unlockAudio, true));
 function playStep(){
   const step = S.steps[S.idx]; if(!step) return;
   const a = ctx(), t0 = a.currentTime + 0.02;
@@ -417,7 +433,8 @@ function micReset(){ mic.min = new Map(); }
 async function startMic(){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
-    const a = ctx(); const srcN = a.createMediaStreamSource(stream);
+    const a = ctx(); if(a.state !== 'running') await a.resume().catch(()=>{});
+    const srcN = a.createMediaStreamSource(stream);
     const an = a.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0; an.minDecibels = -110; an.maxDecibels = -10;
     srcN.connect(an);
     Object.assign(mic, {an, stream, data:new Float32Array(an.frequencyBinCount), binHz:a.sampleRate/an.fftSize});
@@ -483,6 +500,8 @@ function onMidi(e){
 /* ---------- source switching ---------- */
 function setStatus(t){ $('stTxt').textContent = t; }
 async function setSrc(src){
+  try{ if(navigator.audioSession) navigator.audioSession.type = src === 'mic' ? 'play-and-record' : 'playback'; }catch(e){}
+  ctx();                                   // must happen inside the tap, before any await (Safari)
   stopMic(); stopMidi(); $('meter').hidden = true;
   S.src = 'manual';
   if(src === 'mic' && await startMic()){ S.src = 'mic'; $('meter').hidden = false; setStatus('J\'écoute…'); }
@@ -607,6 +626,12 @@ document.addEventListener('keydown', e => {
   renderLib();
   loadSong(song || demoSong());
   ['Manual','Mic','Midi'].forEach(k => $('src'+k).classList.toggle('on', k==='Manual'));
+  const want = store.get('pp:src', 'manual');
+  if(want === 'mic' || want === 'midi'){
+    setStatus(want === 'mic' ? 'Touche l’écran pour réactiver le micro' : 'Touche l’écran pour reconnecter le piano');
+    const once = () => { document.removeEventListener('pointerup', once, true); if(S.src === 'manual') setSrc(want); };
+    document.addEventListener('pointerup', once, true);
+  }
 })();
 </script>
 </body>
