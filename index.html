@@ -15,7 +15,7 @@
 /* Layout: one-screen practice console — header, big "to play" card, keyboard, controls dock */
 :root{
   --bg:#14110f; --panel:#1f1a17; --line:#352d28; --fg:#f3ece6; --muted:#a99c92;
-  --rh:#f2a541; --lh:#4cc3c9; --ok:#7bd88f; --bad:#ff6b6b;
+  --rh:#7cd64a; --lh:#4cc3c9; --ok:#fff3a6; --bad:#ff6b6b;
   --display:"Fraunces", Georgia, serif; --body:"Inter", system-ui, sans-serif;
   color-scheme:dark;
 }
@@ -319,7 +319,7 @@ function targetWindow(){
     if(x.n < lo) lo = x.n; if(x.n > hi) hi = x.n;
   }
   if(hi < 0){ [lo, hi] = S.range || [55,67]; }
-  const span = Math.round(Math.max(MIN_SPAN, whiteIdx(hi) - whiteIdx(lo) + 3) * (isLand() ? 1.15 : 1));   // a bit wider in landscape
+  const span = Math.max(isLand() ? 29 : MIN_SPAN, whiteIdx(hi) - whiteIdx(lo) + 3);   // landscape: at least 4 octaves, like the video
   let wlo = Math.round((whiteIdx(lo) + whiteIdx(hi)) / 2 - span / 2 + 0.5);
   wlo = Math.max(whiteIdx(21), Math.min(wlo, whiteIdx(108) - span + 1));
   return [wlo, span];
