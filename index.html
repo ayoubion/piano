@@ -306,9 +306,12 @@ function whiteToNote(w){ return Math.floor(w/7)*12 + [0,2,4,5,7,9,11][w%7]; }
 /* Keyboard window: follows the notes visible in the falling-notes area, zooming out when lower/higher notes come
    (at least 2 octaves). view.wlo / view.span are eased in animate(). */
 const MIN_SPAN = 15;
+const isLand = () => innerWidth > innerHeight;
+// beats visible in the falling-notes area: fewer on a short screen, so the notes stay tall and spaced out
+function visBeats(){ const H = $('roll').clientHeight || 400; return Math.max(2, Math.min(4.5, H / 85)); }
 function targetWindow(){
   const step = S.steps[S.idx], ppq = S.song ? S.song.ppq : 480;
-  const vt = view.t ?? (step ? step.t : 0), from = vt - ppq*0.25, to = vt + ppq*4.5;
+  const vt = view.t ?? (step ? step.t : 0), from = vt - ppq*0.25, to = vt + ppq*visBeats();
   let lo = 999, hi = -1;
   if(S.song) for(const x of S.song.notes){
     if(x.t > to) break;
@@ -316,7 +319,7 @@ function targetWindow(){
     if(x.n < lo) lo = x.n; if(x.n > hi) hi = x.n;
   }
   if(hi < 0){ [lo, hi] = S.range || [55,67]; }
-  const span = Math.max(MIN_SPAN, whiteIdx(hi) - whiteIdx(lo) + 3);
+  const span = Math.round(Math.max(MIN_SPAN, whiteIdx(hi) - whiteIdx(lo) + 3) * (isLand() ? 1.15 : 1));   // a bit wider in landscape
   let wlo = Math.round((whiteIdx(lo) + whiteIdx(hi)) / 2 - span / 2 + 0.5);
   wlo = Math.max(whiteIdx(21), Math.min(wlo, whiteIdx(108) - span + 1));
   return [wlo, span];
@@ -342,7 +345,7 @@ function drawRoll(){
   const cv = $('roll'); if(!cv.clientWidth || !S.song) return;
   const [g, W, H] = fitCanvas(cv), c = css(), L = kbLayout(W);
   const step = S.steps[S.idx]; if(!step) return;
-  const ppq = S.song.ppq, ppt = H / (ppq * 4.5);    // pixels per tick: ~4.5 beats visible
+  const ppq = S.song.ppq, ppt = H / (ppq * visBeats());    // pixels per tick
   view.ppt = ppt;
   const vt = view.t ?? step.t;
   g.clearRect(0,0,W,H);
@@ -357,7 +360,7 @@ function drawRoll(){
     if(x.t > until) break;
     const d = x.d || ppq/2;
     if(x.t + d < vt - ppq*0.25) continue;
-    const yb = H - (x.t - vt)*ppt, h = Math.max(6, d*ppt - 2);
+    const yb = H - (x.t - vt)*ppt, h = Math.max(18, d*ppt - 4);
     const [kx, kw] = L.keyX(x.n);
     const other = S.hands !== 'both' && x.h !== S.hands;
     const isCur = x.t === step.t || (Math.abs(x.t - step.t) <= ppq/8 && curSet.has(x.n));
