@@ -92,7 +92,8 @@ input[type=range]{width:100%;accent-color:var(--rh)}
   <h3>Morceau</h3>
   <label class="file">Charger un fichier MIDI (.mid)<input type="file" id="file" accept=".mid,.midi,audio/midi,audio/x-midi,audio/mid"></label>
   <p class="small" id="songInfo"></p>
-  <div class="opts"><button id="bDemo">Morceau d'essai (Ode à la joie)</button><button id="bRestart">Recommencer au début</button></div>
+  <div class="opts" id="songs"></div>
+  <div class="opts" style="margin-top:6px"><button id="bRestart">Recommencer au début</button></div>
   <h3>Écoute</h3>
   <div class="opts">
     <button id="srcManual">Manuel</button>
@@ -503,7 +504,19 @@ $('bHands').onclick = () => {
 $('prog').oninput = e => { S.idx = +e.target.value; enterStep(); };
 $('btnMenu').onclick = () => $('menu').showModal();
 $('bClose').onclick = () => $('menu').close();
-$('bDemo').onclick = () => { loadSong(demoSong()); $('menu').close(); };
+/* ---------- song library (kept on this device) ---------- */
+function midiFromB64(b64){ const bin = atob(b64), u = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return parseMidi(u.buffer); }
+function saveToLib(name, b64){
+  const lib = store.get('pp:lib', {}); lib[name] = b64; store.set('pp:lib', lib);
+  try{ localStorage.setItem('pp:lastMidi', JSON.stringify({name, b64})); }catch(e){}
+}
+function renderLib(){
+  const box = $('songs'), lib = store.get('pp:lib', {});
+  box.innerHTML = '';
+  const add = (label, fn) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { fn(); $('menu').close(); }; box.appendChild(b); };
+  Object.keys(lib).forEach(name => add(name, () => { try{ const s = midiFromB64(lib[name]); s.name = name; saveToLib(name, lib[name]); loadSong(s); }catch(e){ $('songInfo').textContent = e.message; } }));
+  add('Ode à la joie (essai)', () => { try{ localStorage.removeItem('pp:lastMidi'); }catch(e){} loadSong(demoSong()); });
+}
 $('bRestart').onclick = () => { S.idx = 0; enterStep(); $('menu').close(); };
 $('srcManual').onclick = () => setSrc('manual');
 $('srcMic').onclick = () => setSrc('mic');
@@ -519,7 +532,7 @@ $('file').onchange = async e => {
     const buf = await f.arrayBuffer();
     const song = parseMidi(buf); song.name = f.name.replace(/\.(mid|midi)$/i,'');
     loadSong(song);
-    try{ let s=''; new Uint8Array(buf).forEach(b=>s+=String.fromCharCode(b)); localStorage.setItem('pp:lastMidi', JSON.stringify({name:song.name, b64:btoa(s)})); }catch(_){}
+    try{ let s=''; new Uint8Array(buf).forEach(b=>s+=String.fromCharCode(b)); saveToLib(song.name, btoa(s)); renderLib(); }catch(_){}
     $('menu').close();
   }catch(err){ $('songInfo').textContent = err.message; }
   e.target.value = '';
@@ -562,11 +575,21 @@ document.addEventListener('keydown', e => {
 /* ---------- boot ---------- */
 (function boot(){
   let song = null;
+  // A link like  …/piano/#m=<name>|<base64url MIDI>  installs a song on this device (the part after # never reaches the server)
+  try{
+    const m = location.hash.match(/^#m=([^|]+)\|(.+)$/);
+    if(m){
+      const name = decodeURIComponent(m[1]), b64 = m[2].replace(/-/g,'+').replace(/_/g,'/');
+      song = midiFromB64(b64); song.name = name;
+      saveToLib(name, b64);
+      history.replaceState(null, '', location.pathname);
+    }
+  }catch(e){ song = null; }
   try{
     const last = JSON.parse(localStorage.getItem('pp:lastMidi') || 'null');
-    if(last){ const bin = atob(last.b64), u = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
-      song = parseMidi(u.buffer); song.name = last.name; }
+    if(!song && last){ song = midiFromB64(last.b64); song.name = last.name; saveToLib(last.name, last.b64); }
   }catch(e){ song = null; }
+  renderLib();
   loadSong(song || demoSong());
   ['Manual','Mic','Midi'].forEach(k => $('src'+k).classList.toggle('on', k==='Manual'));
 })();
