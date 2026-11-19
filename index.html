@@ -42,7 +42,7 @@ main{flex:1;display:flex;flex-direction:column;gap:10px;min-height:0}
 #next .chip{flex:0 0 auto;padding:4px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);font-size:13px;white-space:nowrap}
 #next .chip:first-child{border-color:var(--muted)}
 .R{color:var(--rh)} .L{color:var(--lh)}
-#kb{width:100%;height:clamp(90px,22vh,160px);display:block;border-radius:10px}
+#kb{width:100%;height:clamp(120px,32vh,260px);display:block;border-radius:10px;flex:0 0 auto}
 #status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);min-height:22px}
 #meter{flex:0 0 60px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
 #meter i{display:block;height:100%;width:0;background:var(--ok)}
@@ -59,7 +59,7 @@ label.file{display:block;text-align:center;border:1px dashed var(--muted);border
 label.file input{display:none}
 input[type=range]{width:100%;accent-color:var(--rh)}
 @media (orientation:landscape) and (max-height:500px){
-  #card{min-height:80px} .nn{font-size:clamp(28px,7vh,48px)} #kb{height:28vh}
+  #card{min-height:70px} .nn{font-size:clamp(26px,7vh,44px)} #kb{height:38vh} #next{min-height:24px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
@@ -282,13 +282,18 @@ function drawKb(){
   cv.width = W*dpr; cv.height = H*dpr;
   const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
   const css = getComputedStyle(document.documentElement), c = v => css.getPropertyValue(v).trim();
-  const maxWhites = Math.max(10, Math.floor(W / 15));
+  const HALF = 26;                                   // half a piano: 26 of 52 white keys
+  const maxWhites = Math.max(HALF, Math.floor(W / 12));
   const step = S.steps[S.idx];
   const need = []; S.steps.slice(S.idx, S.idx+4).forEach(s=>s.notes.forEach(x=>need.push(x.n)));
   const [slo, shi] = S.range || [48,72];
   let wlo, whi;
-  if(whiteIdx(shi)-whiteIdx(slo)+3 <= maxWhites){
-    wlo = whiteIdx(slo)-1; whi = wlo + Math.max(whiteIdx(shi)-wlo+1, Math.min(maxWhites, 15));
+  const songW = whiteIdx(shi) - whiteIdx(slo) + 1;
+  if(songW + 2 <= maxWhites){
+    const span = Math.min(maxWhites, Math.max(HALF, songW + 2));
+    wlo = Math.round((whiteIdx(slo) + whiteIdx(shi)) / 2 - span / 2 + 0.5);
+    wlo = Math.max(whiteIdx(21), Math.min(wlo, whiteIdx(108) - span + 1));
+    whi = wlo + span - 1;
   } else {
     const nlo = Math.min(...need, 127), nhi = Math.max(...need, 0);
     if(!kbWin || whiteIdx(nlo) < kbWin[0] || whiteIdx(nhi) > kbWin[1]){
@@ -311,7 +316,11 @@ function drawKb(){
     const n = whiteToNote(w), x = (w-wlo)*kw;
     g.fillStyle = fillFor(n, '#efe9e3'); g.fillRect(x+1, 0, kw-2, H);
     if(nxt.has(n) && !cur.has(n)){ g.strokeStyle = c('--muted'); g.lineWidth = 2; g.strokeRect(x+2.5, H*.62, kw-5, H*.34); }
-    if(n === 60){ g.fillStyle = '#8a7d73'; g.beginPath(); g.arc(x+kw/2, H-8, 3, 0, 7); g.fill(); }
+    if(n % 12 === 0){
+      g.fillStyle = n === 60 ? '#5a4d43' : '#9a8d83';
+      g.font = `${n===60?700:500} ${Math.min(11, kw*0.62)}px Inter, sans-serif`; g.textAlign = 'center';
+      g.fillText(latin ? 'Do' : 'C', x+kw/2, H-6);
+    }
   }
   for(let w=wlo; w<=whi; w++){
     const n = whiteToNote(w) + 1;
