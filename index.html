@@ -62,8 +62,16 @@ label.file{display:block;text-align:center;border:1px dashed var(--muted);border
 label.file input{display:none}
 input[type=range]{width:100%;accent-color:var(--rh)}
 @media (orientation:landscape) and (max-height:500px){
-  #card{min-height:44px;padding:2px 10px} .nn{font-size:clamp(20px,6vh,34px)} #kb{height:30dvh}
-  header{padding:4px 0 2px} main{gap:6px} .dock{padding:4px 0 6px} .dock button{min-height:38px;padding:4px}
+  header{padding:2px 0 0;gap:8px} header h1{font-size:13px;flex:0 1 auto;max-width:30%}
+  header .meta{font-size:11px;flex:1} header button{min-height:28px;padding:0 10px;border-radius:8px}
+  #prog{margin:0 0 3px;height:12px}
+  main{gap:4px}
+  #card{min-height:0;padding:1px 10px;border-radius:10px} .nn{font-size:clamp(16px,5.5dvh,24px)} #now{gap:2px 16px}
+  #kb{height:clamp(56px,19dvh,110px)}
+  #status{display:none}
+  .dock{padding:3px 0 4px;gap:4px;grid-template-columns:repeat(5,1fr)}
+  .dock button{min-height:32px;padding:2px;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px;border-radius:9px}
+  .dock b{font-size:15px;display:inline}
 }
 /* Short portrait screens (Safari with its toolbars and tab bar): compact everything but the falling notes */
 @media (orientation:portrait) and (max-height:760px){
@@ -97,7 +105,7 @@ input[type=range]{width:100%;accent-color:var(--rh)}
 </main>
 <nav class="dock">
   <button id="bPrev"><b>‹</b>Retour</button>
-  <button id="bPlay"><b>♪</b>Écouter</button>
+  <button id="bMic"><b>🎤</b><span id="micTxt">Micro</span></button>
   <button id="bLoop"><b>⟲</b><span id="loopTxt">Boucle</span></button>
   <button id="bHands"><b>✋</b><span id="handsTxt">2 mains</span></button>
   <button id="bNext"><b>›</b>Passer</button>
@@ -118,7 +126,7 @@ input[type=range]{width:100%;accent-color:var(--rh)}
   </div>
   <p class="small" id="srcInfo">Le câble USB-MIDI est le plus fiable (accords compris). Le micro marche bien pour les notes seules et les accords simples, dans une pièce calme.</p>
   <h3>Sensibilité du micro</h3>
-  <input type="range" id="sens" min="1" max="10" value="5" aria-label="Sensibilité du micro">
+  <input type="range" id="sens" min="1" max="10" value="4" aria-label="Sensibilité du micro">
   <p class="small">Plus haut : avance plus facilement (risque de faux déclenchements). Plus bas : plus strict.</p>
   <h3>Affichage</h3>
   <div class="opts"><button id="bNames">Noms : Do Ré Mi</button></div>
@@ -237,7 +245,7 @@ function loadSong(song, keepPos){
   S.song = song; buildSteps();
   if(curT != null){ S.idx = Math.max(0, S.steps.findIndex(s => s.t >= curT)); }
   else S.idx = Math.min(store.get('pp:pos:'+song.name, 0), S.steps.length-1);
-  S.loopA = S.loopB = null; view.t = null;
+  S.loopA = S.loopB = null; view.t = null; view.wlo = view.span = null;
   $('title').textContent = song.name;
   $('prog').max = Math.max(0, S.steps.length-1);
   $('songInfo').textContent = `${song.name} — ${S.steps.length} étapes, ${Math.ceil((song.notes[song.notes.length-1].t+1)/song.barTicks)} mesures.`;
@@ -292,20 +300,34 @@ function render(){
 
 /* ---------- keyboard canvas ---------- */
 const wrong = new Map();
-const view = { t:null, raf:0 };                     // animated scroll position of the falling notes (ticks)
+const view = { t:null, raf:0, wlo:null, span:null };                     // animated scroll position of the falling notes (ticks)
 function whiteIdx(n){ const o = Math.floor(n/12), r=n%12; return o*7 + [0,0,1,1,2,3,3,4,4,5,5,6][r]; }
 function whiteToNote(w){ return Math.floor(w/7)*12 + [0,2,4,5,7,9,11][w%7]; }
-/* Keyboard window: always the whole range of the song (plus a key of margin), never less than half a piano */
-function kbLayout(W){
-  const HALF = 26;
-  const [slo, shi] = S.range || [48,72];
-  const span = Math.max(HALF, whiteIdx(shi) - whiteIdx(slo) + 3);
-  let wlo = Math.round((whiteIdx(slo) + whiteIdx(shi)) / 2 - span / 2 + 0.5);
+/* Keyboard window: follows the notes visible in the falling-notes area, zooming out when lower/higher notes come
+   (at least 2 octaves). view.wlo / view.span are eased in animate(). */
+const MIN_SPAN = 15;
+function targetWindow(){
+  const step = S.steps[S.idx], ppq = S.song ? S.song.ppq : 480;
+  const vt = view.t ?? (step ? step.t : 0), from = vt - ppq*0.25, to = vt + ppq*4.5;
+  let lo = 999, hi = -1;
+  if(S.song) for(const x of S.song.notes){
+    if(x.t > to) break;
+    if(x.t + (x.d||ppq/2) < from) continue;
+    if(x.n < lo) lo = x.n; if(x.n > hi) hi = x.n;
+  }
+  if(hi < 0){ [lo, hi] = S.range || [55,67]; }
+  const span = Math.max(MIN_SPAN, whiteIdx(hi) - whiteIdx(lo) + 3);
+  let wlo = Math.round((whiteIdx(lo) + whiteIdx(hi)) / 2 - span / 2 + 0.5);
   wlo = Math.max(whiteIdx(21), Math.min(wlo, whiteIdx(108) - span + 1));
-  const whi = wlo + span - 1, kw = W / span;
+  return [wlo, span];
+}
+function kbLayout(W){
+  if(view.wlo == null){ [view.wlo, view.span] = targetWindow(); }
+  const off = view.wlo, span = view.span, kw = W / span;
+  const wlo = Math.floor(off), whi = Math.ceil(off + span) - 1;
   // x position and width of a note's key
-  const keyX = n => isBlack(n) ? [(whiteIdx(n-1)-wlo+1)*kw - kw*0.32, kw*0.64] : [(whiteIdx(n)-wlo)*kw, kw];
-  return {wlo, whi, kw, keyX};
+  const keyX = n => isBlack(n) ? [(whiteIdx(n-1)-off+1)*kw - kw*0.32, kw*0.64] : [(whiteIdx(n)-off)*kw, kw];
+  return {wlo, whi, off, kw, keyX};
 }
 function css(){ const s = getComputedStyle(document.documentElement); return v => s.getPropertyValue(v).trim(); }
 function fitCanvas(cv){
@@ -326,7 +348,7 @@ function drawRoll(){
   g.clearRect(0,0,W,H);
   // guide lines on every C, and bar lines
   g.fillStyle = '#ffffff10';
-  for(let w=L.wlo; w<=L.whi; w++) if(whiteToNote(w)%12===0) g.fillRect((w-L.wlo)*L.kw, 0, 1, H);
+  for(let w=L.wlo; w<=L.whi; w++) if(whiteToNote(w)%12===0) g.fillRect((w-L.off)*L.kw, 0, 1, H);
   const bt = S.song.barTicks;
   for(let b = Math.ceil(vt/bt)*bt; (b - vt)*ppt < H; b += bt){ g.fillStyle = '#ffffff18'; g.fillRect(0, H - (b-vt)*ppt, W, 1); }
   const curSet = new Set(step.notes.map(x=>x.n));
@@ -354,19 +376,32 @@ function animate(){
   view.raf = 0;
   const step = S.steps[S.idx]; if(!step) return;
   if(view.t == null) view.t = step.t;
-  if(drag){ drawRoll(); return; }                   // finger controls the scroll
-  const diff = step.t - view.t;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if(reduce || Math.abs(diff) < 1 || Math.abs(diff) > S.song.ppq*16) view.t = step.t;
-  else view.t += diff * 0.22;
+  if(!drag){
+    const diff = step.t - view.t;
+    if(reduce || Math.abs(diff) < 1 || Math.abs(diff) > S.song.ppq*16) view.t = step.t;
+    else view.t += diff * 0.22;
+  }
+  // zoom
+  const [tw, ts] = targetWindow();
+  if(view.wlo == null){ view.wlo = tw; view.span = ts; }
+  let zooming = false;
+  for(const [k, v] of [['wlo', tw], ['span', ts]]){
+    const d = v - view[k];
+    if(reduce || Math.abs(d) < 0.01) view[k] = v; else { view[k] += d * 0.12; zooming = true; }
+  }
   drawRoll();
-  if(view.t !== step.t) view.raf = requestAnimationFrame(animate);
+  paintKb();
+  if(drag ? zooming : (view.t !== step.t || zooming)) view.raf = requestAnimationFrame(animate);
 }
 function drawKb(){
   if(!view.raf) view.raf = requestAnimationFrame(animate);
+  paintKb();
+}
+function paintKb(){
   const cv = $('kb'); if(!cv.clientWidth) return;
   const [g, W, H] = fitCanvas(cv), c = css();
-  const {wlo, whi, kw} = kbLayout(W);
+  const {wlo, whi, off, kw} = kbLayout(W);
   const step = S.steps[S.idx];
   const cur = new Map(); step && step.notes.forEach(x=>cur.set(x.n, x.h));
   const nextS = S.steps[S.idx+1]; const nxt = new Set(nextS ? nextS.notes.map(x=>x.n) : []);
@@ -377,7 +412,7 @@ function drawKb(){
   };
   g.clearRect(0,0,W,H);
   for(let w=wlo; w<=whi; w++){
-    const n = whiteToNote(w), x = (w-wlo)*kw;
+    const n = whiteToNote(w), x = (w-off)*kw;
     g.fillStyle = fillFor(n, '#efe9e3'); g.fillRect(x+1, 0, kw-2, H);
     if(nxt.has(n) && !cur.has(n)){ g.strokeStyle = c('--muted'); g.lineWidth = 2; g.strokeRect(x+2.5, H*.62, kw-5, H*.34); }
     if(n % 12 === 0){
@@ -386,10 +421,10 @@ function drawKb(){
       g.fillText(latin ? 'Do' : 'C', x+kw/2, H-6);
     }
   }
-  for(let w=wlo; w<=whi; w++){
+  for(let w=wlo-1; w<=whi; w++){
     const n = whiteToNote(w) + 1;
     if(!isBlack(n) || w===whi) continue;
-    const x = (w-wlo+1)*kw - kw*0.32;
+    const x = (w-off+1)*kw - kw*0.32;
     g.fillStyle = fillFor(n, '#1b1714'); g.fillRect(x, 0, kw*0.64, H*0.6);
     if(nxt.has(n) && !cur.has(n)){ g.strokeStyle = c('--muted'); g.lineWidth = 2; g.strokeRect(x+1, H*.3, kw*.64-2, H*.28); }
   }
@@ -428,8 +463,8 @@ function playStep(){
 }
 
 /* ---------- microphone listening ---------- */
-const mic = { an:null, data:null, stream:null, timer:null, min:new Map(), binHz:0 };
-function micReset(){ mic.min = new Map(); }
+const mic = { an:null, data:null, stream:null, timer:null, min:new Map(), cand:new Map(), binHz:0 };
+function micReset(){ mic.min = new Map(); mic.cand = new Map(); }
 async function startMic(){
   try{
     const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
@@ -475,7 +510,11 @@ function micTick(){
     const L = noteLevel(x.n);
     if(settle || !mic.min.has(x.n)){ mic.min.set(x.n, L); continue; }
     const m = Math.min(mic.min.get(x.n), L); mic.min.set(x.n, m);
-    if(L - m >= rise && L - floor >= snr){ hit(x.n); }
+    // a real piano note is a narrow peak: louder than the semitones on each side (voices, TV, clatter are broad)
+    const prom = L - Math.max(noteLevel(x.n-1), noteLevel(x.n+1));
+    const ok = L - m >= rise && L - floor >= snr && prom >= 14 - sens;
+    const c = ok ? (mic.cand.get(x.n)||0) + 1 : 0; mic.cand.set(x.n, c);
+    if(c >= 2) hit(x.n);
   }
 }
 
@@ -508,6 +547,7 @@ async function setSrc(src){
   else if(src === 'midi' && await startMidi()){ S.src = 'midi'; }
   else if(src === 'manual') setStatus('Mode manuel : touche les notes qui tombent pour avancer');
   ['Manual','Mic','Midi'].forEach(k => $('src'+k).classList.toggle('on', S.src === k.toLowerCase()));
+  $('bMic').classList.toggle('on', S.src === 'mic'); $('micTxt').textContent = S.src === 'mic' ? 'Micro ON' : 'Micro';
   store.set('pp:src', S.src);
   wake();
 }
@@ -524,7 +564,7 @@ $('card').addEventListener('click', skip);
 $('card').addEventListener('keydown', e => { if(e.key===' '||e.key==='Enter'){ e.preventDefault(); skip(); } });
 $('bNext').onclick = skip;
 $('bPrev').onclick = back;
-$('bPlay').onclick = playStep;
+$('bMic').onclick = () => setSrc(S.src === 'mic' ? 'manual' : 'mic');
 $('bLoop').onclick = () => {
   if(S.loopA==null){ S.loopA = S.idx; }
   else if(S.loopB==null){ if(S.idx < S.loopA){ S.loopB = S.loopA; S.loopA = S.idx; } else S.loopB = S.idx; S.idx = S.loopA; enterStep(); return; }
@@ -555,7 +595,7 @@ $('bRestart').onclick = () => { S.idx = 0; enterStep(); $('menu').close(); };
 $('srcManual').onclick = () => setSrc('manual');
 $('srcMic').onclick = () => setSrc('mic');
 $('srcMidi').onclick = () => setSrc('midi');
-$('sens').value = store.get('pp:sens', 5);
+$('sens').value = store.get('pp:sens', 4);
 $('sens').oninput = e => store.set('pp:sens', +e.target.value);
 const namesTxt = () => $('bNames').textContent = latin ? 'Noms : Do Ré Mi' : 'Noms : C D E';
 $('bNames').onclick = () => { latin = !latin; store.set('pp:latin', latin); namesTxt(); render(); };
@@ -594,7 +634,7 @@ roll.addEventListener('pointermove', e => {
   let lo = 0, hi = steps.length-1;
   while(lo < hi){ const m = (lo+hi)>>1; if(steps[m].t < t) lo = m+1; else hi = m; }
   if(lo > 0 && t - steps[lo-1].t < steps[lo].t - t) lo--;
-  if(lo !== S.idx){ S.idx = lo; enterStep(); } else drawRoll();
+  if(lo !== S.idx){ S.idx = lo; enterStep(); } else drawKb();
 });
 const endDrag = e => {
   if(!drag || e.pointerId !== drag.id) return;
